@@ -17,45 +17,58 @@ GH_PAT = os.environ.get("GH_PAT", "")
 REPO = "narkajin/narka-daily-report"
 SLACK_USER_IDS = os.environ.get("SLACK_USER_IDS", os.environ.get("SLACK_USER_ID", "")).split(",")
 
+# Narka 라인 매핑
+LINE_MAP = {
+    "마스카라": "Mascara",
+    "mascara": "Mascara",
+    "왁스": "Wax",
+    "wax": "Wax",
+    "미스트": "Mist",
+    "mist": "Mist",
+    "밀크": "Hair Milk",
+    "milk": "Hair Milk",
+    "트리트먼트": "Treatment",
+    "treatment": "Treatment",
+    "헤어 팩": "Treatment",
+    "샴푸": "Shampoo",
+    "shampoo": "Shampoo",
+    "세럼": "Serum",
+    "serum": "Serum",
+}
+
 # ==============================
 # GitHub Secrets 자동 업데이트
 # ==============================
-def encrypt_secret(public_key: str, secret_value: str) -> str:
+def encrypt_secret(public_key, secret_value):
     pk = public.PublicKey(public_key.encode("utf-8"), encoding.Base64Encoder())
     sealed = public.SealedBox(pk).encrypt(secret_value.encode("utf-8"))
     return base64.b64encode(sealed).decode("utf-8")
 
-def update_github_secret(secret_name: str, secret_value: str):
+def update_github_secret(secret_name, secret_value):
     if not GH_PAT:
-        print(f"⚠️ GH_PAT 없음, {secret_name} 업데이트 스킵")
         return
     headers = {"Authorization": f"Bearer {GH_PAT}", "Accept": "application/vnd.github+json"}
-    # 공개키 가져오기
     key_resp = requests.get(f"https://api.github.com/repos/{REPO}/actions/secrets/public-key", headers=headers)
     key_data = key_resp.json()
     encrypted = encrypt_secret(key_data["key"], secret_value)
-    # Secret 업데이트
     resp = requests.put(
         f"https://api.github.com/repos/{REPO}/actions/secrets/{secret_name}",
-        headers=headers,
-        json={"encrypted_value": encrypted, "key_id": key_data["key_id"]}
-    )
+        headers=headers, json={"encrypted_value": encrypted, "key_id": key_data["key_id"]})
     if resp.status_code in [201, 204]:
-        print(f"✅ GitHub Secret '{secret_name}' 자동 업데이트 완료")
+        print(f"✅ Secret '{secret_name}' 자동 업데이트")
     else:
-        print(f"❌ Secret 업데이트 실패: {resp.status_code} {resp.text[:200]}")
+        print(f"❌ Secret 업데이트 실패: {resp.status_code}")
 
 # ==============================
 # 카페24 토큰 갱신
 # ==============================
 def refresh_access_token():
     url = f"https://{MALL_ID}.cafe24api.com/api/v2/oauth/token"
-    response = requests.post(url, auth=(CLIENT_ID, CLIENT_SECRET),
+    resp = requests.post(url, auth=(CLIENT_ID, CLIENT_SECRET),
         data={"grant_type": "refresh_token", "refresh_token": REFRESH_TOKEN})
-    data = response.json()
+    data = resp.json()
     if "access_token" in data:
-        print(f"✅ 토큰 갱신 성공")
-        # 새 토큰을 GitHub Secrets에 자동 저장
+        print("✅ 토큰 갱신 성공")
         update_github_secret("CAFE24_ACCESS_TOKEN", data["access_token"])
         update_github_secret("CAFE24_REFRESH_TOKEN", data["refresh_token"])
         return data["access_token"]
@@ -66,117 +79,172 @@ def refresh_access_token():
 # ==============================
 # 카페24 주문 수집
 # ==============================
-def get_orders(token):
-    yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+def get_orders_for_date(token, date_str):
     url = f"https://{MALL_ID}.cafe24api.com/api/v2/admin/orders"
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     all_orders = []
     offset = 0
     while True:
-        params = {"start_date": yesterday, "end_date": yesterday, "limit": 100, "offset": offset, "embed": "items"}
-        response = requests.get(url, headers=headers, params=params)
-        print(f"📡 상태코드: {response.status_code}")
-        try:
-            raw = response.json()
-        except:
-            print(f"❌ JSON 파싱 실패: {response.text[:300]}")
+        params = {"start_date": date_str, "end_date": date_str, "limit": 100, "offset": offset, "embed": "items"}
+        resp = requests.get(url, headers=headers, params=params)
+        if resp.status_code != 200:
+            print(f"❌ API {resp.status_code}: {resp.text[:200]}")
             break
+        raw = resp.json()
         orders = raw.get("orders", [])
         if not orders:
-            if "error" in raw:
-                print(f"❌ API 에러: {raw['error']}")
             break
         all_orders.extend(orders)
         if len(orders) < 100:
             break
         offset += 100
-    print(f"✅ 총 {len(all_orders)}건 수집")
-    return all_orders, yesterday
+    return all_orders
+
+def get_orders(token):
+    now = datetime.now()
+    yesterday = (now - timedelta(days=1)).strftime("%Y-%m-%d")
+    day_before = (now - timedelta(days=2)).strftime("%Y-%m-%d")
+    same_day_last_week = (now - timedelta(days=8)).strftime("%Y-%m-%d")
+
+    print(f"📅 어제: {yesterday} / 전일: {day_before} / 전주 동요일: {same_day_last_week}")
+
+    orders_yesterday = get_orders_for_date(token, yesterday)
+    print(f"✅ 어제 {len(orders_yesterday)}건")
+
+    orders_day_before = get_orders_for_date(token, day_before)
+    print(f"✅ 전일 {len(orders_day_before)}건")
+
+    orders_last_week = get_orders_for_date(token, same_day_last_week)
+    print(f"✅ 전주 동요일 {len(orders_last_week)}건")
+
+    return orders_yesterday, orders_day_before, orders_last_week, yesterday
 
 # ==============================
-# 매출 집계
+# 라인 분류
 # ==============================
-def normalize_product_name(name: str) -> str:
-    import re
-    name = re.sub(r'\(.*?\)', '', name)
-    name = re.sub(r'\[.*?\]', '', name)
-    name = re.sub(r'[-–]\s*(Black|Brown|Clear|White|\d+ml|\d+g)', '', name, flags=re.IGNORECASE)
-    return name.strip()
-
-def extract_line_name(name: str) -> str:
-    keywords = ["Hype Fit", "Hair Milk", "Scalp", "Treatment", "Serum", "Shampoo", "Conditioner", "Mascara", "Wax", "Mist"]
-    for kw in keywords:
-        if kw.lower() in name.lower():
-            return kw
+def extract_line(name):
+    name_lower = name.lower()
+    for keyword, line in LINE_MAP.items():
+        if keyword in name_lower:
+            return line
     return "기타"
 
-def aggregate_sales(orders):
+# ==============================
+# 매출 집계 (상품별 + 옵션별)
+# ==============================
+def aggregate(orders):
     product_sales = defaultdict(lambda: {"quantity": 0, "revenue": 0})
+    option_sales = defaultdict(lambda: {"quantity": 0, "revenue": 0})
     line_sales = defaultdict(lambda: {"quantity": 0, "revenue": 0})
+    total_revenue = 0
+    total_quantity = 0
+
     for order in orders:
         items = order.get("items", [])
         for item in items:
-            raw_name = item.get("product_name", "기타")
+            pname = item.get("product_name", "기타")
+            option = item.get("option_value", "")
             qty = int(item.get("quantity", 0))
             price = float(item.get("product_price", 0)) * qty
-            pname = normalize_product_name(raw_name)
+
             product_sales[pname]["quantity"] += qty
             product_sales[pname]["revenue"] += price
-            lname = extract_line_name(raw_name)
-            line_sales[lname]["quantity"] += qty
-            line_sales[lname]["revenue"] += price
-    return (dict(sorted(product_sales.items(), key=lambda x: x[1]["revenue"], reverse=True)),
-            dict(sorted(line_sales.items(), key=lambda x: x[1]["revenue"], reverse=True)))
+
+            option_key = f"{pname} [{option}]" if option else pname
+            option_sales[option_key]["quantity"] += qty
+            option_sales[option_key]["revenue"] += price
+
+            line = extract_line(pname)
+            line_sales[line]["quantity"] += qty
+            line_sales[line]["revenue"] += price
+
+            total_revenue += price
+            total_quantity += qty
+
+    sort_by_rev = lambda d: dict(sorted(d.items(), key=lambda x: x[1]["revenue"], reverse=True))
+    return {
+        "products": sort_by_rev(product_sales),
+        "options": sort_by_rev(option_sales),
+        "lines": sort_by_rev(line_sales),
+        "total_revenue": total_revenue,
+        "total_quantity": total_quantity
+    }
 
 # ==============================
-# Claude API 인사이트
+# 비교 수치 계산
 # ==============================
-def generate_insight(product_sales, line_sales, date_str):
-    top_products = dict(list(product_sales.items())[:10])
-    total_rev = sum(d["revenue"] for d in product_sales.values())
-    total_qty = sum(d["quantity"] for d in product_sales.values())
+def calc_change(current, previous):
+    if previous == 0:
+        return "+NEW" if current > 0 else "0%"
+    pct = ((current - previous) / previous) * 100
+    sign = "+" if pct >= 0 else ""
+    return f"{sign}{pct:.1f}%"
 
+# ==============================
+# 리포트 생성
+# ==============================
+def build_report(data_yesterday, data_day_before, data_last_week, date_str):
+    y = data_yesterday
+    db = data_day_before
+    lw = data_last_week
+
+    rev_change_db = calc_change(y["total_revenue"], db["total_revenue"])
+    qty_change_db = calc_change(y["total_quantity"], db["total_quantity"])
+    rev_change_lw = calc_change(y["total_revenue"], lw["total_revenue"])
+
+    lines = []
+    lines.append(f"💰 *전체 매출: {y['total_revenue']:,.0f}원* ({y['total_quantity']}개)")
+    lines.append(f"📈 전일 대비: 매출 {rev_change_db} / 수량 {qty_change_db}")
+    lines.append(f"📊 전주 동요일 대비: 매출 {rev_change_lw}")
+    lines.append("")
+
+    # 상품별 TOP 5
+    lines.append("*🏆 상품별 TOP 5*")
+    for i, (name, d) in enumerate(list(y["products"].items())[:5], 1):
+        prev = db["products"].get(name, {"revenue": 0})["revenue"]
+        change = calc_change(d["revenue"], prev)
+        lines.append(f"{i}. {name} — {d['revenue']:,.0f}원 ({d['quantity']}개) _{change}_")
+    lines.append("")
+
+    # 옵션별 TOP 10
+    lines.append("*📦 옵션별 TOP 10*")
+    for i, (name, d) in enumerate(list(y["options"].items())[:10], 1):
+        lines.append(f"{i}. {name} — {d['revenue']:,.0f}원 ({d['quantity']}개)")
+    lines.append("")
+
+    # 라인별
+    lines.append("*📋 라인별 매출*")
+    for name, d in y["lines"].items():
+        prev = db["lines"].get(name, {"revenue": 0})["revenue"]
+        change = calc_change(d["revenue"], prev)
+        lines.append(f"• {name}: {d['revenue']:,.0f}원 ({d['quantity']}개) _{change}_")
+
+    return "\n".join(lines)
+
+# ==============================
+# Claude AI 인사이트
+# ==============================
+def generate_ai_insight(report_text, date_str):
     prompt = f"""
-다음은 Narka(나르카) 카페24 쇼핑몰의 {date_str} 판매 데이터입니다.
+다음은 Narka(나르카) 카페24 쇼핑몰 {date_str} 일일 판매 리포트입니다:
 
-전체 매출: {total_rev:,.0f}원 / 총 판매수량: {total_qty}개
+{report_text}
 
-[상품별 매출 TOP 10]
-{json.dumps(top_products, ensure_ascii=False, indent=2)}
-
-[라인별 매출 합산]
-{json.dumps(line_sales, ensure_ascii=False, indent=2)}
-
-COO 직속 담당자에게 보내는 일일 판매 브리핑을 작성해주세요:
-1. 전체 매출 총액 및 총 판매수량 요약 (1줄)
-2. 상품별 TOP 5 순위 (매출액 + 수량)
-3. 라인별 매출 현황
-4. 주목할 포인트 또는 ALERT
-5. 한줄 액션 제안
-
-- 슬랙 메시지 형식, 이모지 활용
-- 간결하고 실무적인 톤
-- 숫자는 한국식 단위(원, 개)
-- 20줄 이내
+위 데이터를 바탕으로 3줄 이내의 짧은 인사이트를 작성해주세요:
+- 주목할 이상 신호 또는 기회
+- 구체적인 액션 제안 1개
+- 이모지 활용, 한국어, 간결한 실무 톤
 """
     headers = {"x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"}
-    body = {"model": "claude-sonnet-4-20250514", "max_tokens": 1000, "messages": [{"role": "user", "content": prompt}]}
-    response = requests.post("https://api.anthropic.com/v1/messages", headers=headers, json=body)
-    result = response.json()
-    print(f"🤖 Claude API 상태: {response.status_code}")
+    body = {"model": "claude-sonnet-4-20250514", "max_tokens": 500, "messages": [{"role": "user", "content": prompt}]}
+    resp = requests.post("https://api.anthropic.com/v1/messages", headers=headers, json=body)
+    result = resp.json()
+    print(f"🤖 Claude API: {resp.status_code}")
     if "content" in result:
         return result["content"][0]["text"]
     else:
-        print(f"❌ Claude API 에러: {json.dumps(result, ensure_ascii=False)[:500]}")
-        # 폴백: 기본 리포트
-        top5 = list(product_sales.items())[:5]
-        report = f"💰 전체 매출: {total_rev:,.0f}원 | 총 {total_qty}개 판매\n\n*🏆 상품별 TOP 5*\n"
-        for i, (name, data) in enumerate(top5, 1):
-            report += f"{i}. {name} — {data['revenue']:,.0f}원 ({data['quantity']}개)\n"
-        report += f"\n*📦 라인별 매출*\n"
-        for name, data in line_sales.items():
-            report += f"• {name}: {data['revenue']:,.0f}원 ({data['quantity']}개)\n"
-        return report
+        print(f"❌ Claude 에러: {json.dumps(result, ensure_ascii=False)[:300]}")
+        return None
 
 # ==============================
 # 슬랙 DM
@@ -189,11 +257,12 @@ def send_slack_dm(user_id, message):
         print(f"❌ DM 실패 ({user_id}): {dm_data}")
         return
     ch = dm_data["channel"]["id"]
-    msg = requests.post("https://slack.com/api/chat.postMessage", headers=headers, json={"channel": ch, "text": message, "mrkdwn": True})
+    msg = requests.post("https://slack.com/api/chat.postMessage", headers=headers,
+        json={"channel": ch, "text": message, "mrkdwn": True})
     if msg.json().get("ok"):
-        print(f"✅ DM 발송 → {user_id}")
+        print(f"✅ DM → {user_id}")
     else:
-        print(f"❌ 발송 실패 ({user_id}): {msg.json()}")
+        print(f"❌ 발송 실패: {msg.json()}")
 
 def send_to_all(message):
     for uid in SLACK_USER_IDS:
@@ -206,15 +275,26 @@ def send_to_all(message):
 def main():
     print("🚀 Narka 일일 리포트 시작...")
     token = refresh_access_token()
-    orders, date_str = get_orders(token)
 
-    if not orders:
+    orders_y, orders_db, orders_lw, date_str = get_orders(token)
+
+    if not orders_y:
         send_to_all(f"⚠️ *Narka 일일 리포트 | {date_str}*\n\n어제 카페24 주문 데이터가 없습니다.")
         return
 
-    product_sales, line_sales = aggregate_sales(orders)
-    insight = generate_insight(product_sales, line_sales, date_str)
-    send_to_all(f"*📊 Narka 카페24 일일 리포트 | {date_str}*\n\n{insight}")
+    data_y = aggregate(orders_y)
+    data_db = aggregate(orders_db)
+    data_lw = aggregate(orders_lw)
+
+    report = build_report(data_y, data_db, data_lw, date_str)
+
+    # AI 인사이트 추가
+    ai_insight = generate_ai_insight(report, date_str)
+    if ai_insight:
+        report += f"\n\n*💡 AI 인사이트*\n{ai_insight}"
+
+    final = f"*📊 Narka 카페24 일일 리포트 | {date_str}*\n\n{report}"
+    send_to_all(final)
     print("✅ 완료!")
 
 if __name__ == "__main__":
