@@ -140,12 +140,35 @@ def aggregate(orders):
     total_quantity = 0
 
     for order in orders:
+        # 주문 단위 실결제 금액
+        order_payment = float(order.get("actual_order_amount", {}).get("payment_amount", 0) or 0)
         items = order.get("items", [])
+        
+        # 아이템별 실결제 금액 계산 (아이템 정가 비율로 배분)
+        item_prices = []
+        total_item_price = 0
         for item in items:
+            qty = int(item.get("quantity", 0))
+            # 실결제 기준: actual_payment > product_sale_price > product_price 순으로 시도
+            actual = float(item.get("actual_payment_amount", 0) or 0)
+            sale = float(item.get("product_sale_price", 0) or 0)
+            orig = float(item.get("product_price", 0) or 0)
+            unit_price = actual if actual > 0 else (sale if sale > 0 else orig)
+            item_total = unit_price * qty
+            item_prices.append(item_total)
+            total_item_price += item_total
+        
+        for idx, item in enumerate(items):
             pname = item.get("product_name", "기타")
             option = item.get("option_value", "")
             qty = int(item.get("quantity", 0))
-            price = float(item.get("product_price", 0)) * qty
+            
+            # 주문 실결제를 아이템 비율로 배분
+            if total_item_price > 0 and order_payment > 0:
+                ratio = item_prices[idx] / total_item_price
+                price = order_payment * ratio
+            else:
+                price = item_prices[idx]
 
             product_sales[pname]["quantity"] += qty
             product_sales[pname]["revenue"] += price
