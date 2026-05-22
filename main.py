@@ -25,18 +25,17 @@ def refresh_access_token():
         print(f"✅ 토큰 갱신 성공")
         return data["access_token"]
     else:
-        print(f"⚠️ 토큰 갱신 실패: {data}")
+        print(f"⚠️ 토큰 갱신 실패, 기존 토큰 사용: {data}")
         return ACCESS_TOKEN
 
 def get_orders(token):
     yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
 
-    # 카페24 API v2 정확한 엔드포인트
     url = f"https://{MALL_ID}.cafe24api.com/api/v2/orders"
+    # X-Cafe24-Api-Version 헤더 제거 - 없어야 정상 작동
     headers = {
         "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json",
-        "X-Cafe24-Api-Version": "2022-09-01"
+        "Content-Type": "application/json"
     }
 
     all_orders = []
@@ -57,10 +56,10 @@ def get_orders(token):
         try:
             raw = response.json()
         except:
-            print(f"❌ JSON 파싱 실패: {response.text[:200]}")
+            print(f"❌ JSON 파싱 실패: {response.text[:300]}")
             break
 
-        print(f"📦 응답: {json.dumps(raw, ensure_ascii=False)[:500]}")
+        print(f"📦 응답: {json.dumps(raw, ensure_ascii=False)[:800]}")
 
         orders = raw.get("orders", [])
         if not orders:
@@ -163,7 +162,6 @@ def send_slack_dm(user_id, message):
     if not dm_data.get("ok"):
         print(f"❌ DM 채널 열기 실패: {dm_data}")
         return
-
     channel_id = dm_data["channel"]["id"]
     msg_response = requests.post(
         "https://slack.com/api/chat.postMessage",
