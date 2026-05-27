@@ -136,9 +136,8 @@ def aggregate(orders):
     product_sales = defaultdict(lambda: {"quantity": 0, "revenue": 0})
     option_sales = defaultdict(lambda: {"quantity": 0, "revenue": 0})
     line_sales = defaultdict(lambda: {"quantity": 0, "revenue": 0})
-    total_revenue = 0
+    net_revenue = 0  # 순매출 (주문 단위 합산)
     total_quantity = 0
-
     total_canceled = 0
     total_refunded = 0
 
@@ -149,41 +148,40 @@ def aggregate(orders):
             total_canceled += cancel_amt
             continue
 
-        # 실결제 금액 - 환불금액 = 순매출
+        # 순매출 = 결제금액 - 환불금액 (주문 단위)
         order_payment = float(order.get("actual_order_amount", {}).get("payment_amount", 0) or 0)
         refund_amount = float(order.get("actual_order_amount", {}).get("refund_amount", 0) or 0)
         if refund_amount > 0:
             total_refunded += refund_amount
-            order_payment -= refund_amount
+        order_net = order_payment - refund_amount
 
-        if order_payment <= 0:
+        # 순매출 합산 (주문 단위 — 카페24 대시보드 기준)
+        net_revenue += order_net
+
+        if order_net <= 0:
             continue
 
         items = order.get("items", [])
-        
-        # 아이템별 실결제 금액 계산 (아이템 정가 비율로 배분)
+
+        # 아이템별 정가 계산 (상품별/옵션별 배분용)
         item_prices = []
         total_item_price = 0
         for item in items:
             qty = int(item.get("quantity", 0))
-            # 실결제 기준: actual_payment > product_sale_price > product_price 순으로 시도
-            actual = float(item.get("actual_payment_amount", 0) or 0)
-            sale = float(item.get("product_sale_price", 0) or 0)
             orig = float(item.get("product_price", 0) or 0)
-            unit_price = actual if actual > 0 else (sale if sale > 0 else orig)
-            item_total = unit_price * qty
+            item_total = orig * qty
             item_prices.append(item_total)
             total_item_price += item_total
-        
+
         for idx, item in enumerate(items):
             pname = item.get("product_name", "기타")
             option = item.get("option_value", "")
             qty = int(item.get("quantity", 0))
-            
-            # 주문 실결제를 아이템 비율로 배분
-            if total_item_price > 0 and order_payment > 0:
+
+            # 주문 순매출을 아이템 정가 비율로 배분
+            if total_item_price > 0 and order_net > 0:
                 ratio = item_prices[idx] / total_item_price
-                price = order_payment * ratio
+                price = order_net * ratio
             else:
                 price = item_prices[idx]
 
@@ -198,7 +196,6 @@ def aggregate(orders):
             line_sales[line]["quantity"] += qty
             line_sales[line]["revenue"] += price
 
-            total_revenue += price
             total_quantity += qty
 
     sort_by_rev = lambda d: dict(sorted(d.items(), key=lambda x: x[1]["revenue"], reverse=True))
@@ -206,7 +203,7 @@ def aggregate(orders):
         "products": sort_by_rev(product_sales),
         "options": sort_by_rev(option_sales),
         "lines": sort_by_rev(line_sales),
-        "total_revenue": total_revenue,
+        "total_revenue": net_revenue,
         "total_quantity": total_quantity,
         "total_canceled": total_canceled,
         "total_refunded": total_refunded
