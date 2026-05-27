@@ -139,9 +139,26 @@ def aggregate(orders):
     total_revenue = 0
     total_quantity = 0
 
+    total_canceled = 0
+    total_refunded = 0
+
     for order in orders:
-        # 주문 단위 실결제 금액
+        # 취소 주문 완전 제외
+        if order.get("canceled") == "T":
+            cancel_amt = float(order.get("actual_order_amount", {}).get("payment_amount", 0) or 0)
+            total_canceled += cancel_amt
+            continue
+
+        # 실결제 금액 - 환불금액 = 순매출
         order_payment = float(order.get("actual_order_amount", {}).get("payment_amount", 0) or 0)
+        refund_amount = float(order.get("actual_order_amount", {}).get("refund_amount", 0) or 0)
+        if refund_amount > 0:
+            total_refunded += refund_amount
+            order_payment -= refund_amount
+
+        if order_payment <= 0:
+            continue
+
         items = order.get("items", [])
         
         # 아이템별 실결제 금액 계산 (아이템 정가 비율로 배분)
@@ -190,7 +207,9 @@ def aggregate(orders):
         "options": sort_by_rev(option_sales),
         "lines": sort_by_rev(line_sales),
         "total_revenue": total_revenue,
-        "total_quantity": total_quantity
+        "total_quantity": total_quantity,
+        "total_canceled": total_canceled,
+        "total_refunded": total_refunded
     }
 
 # ==============================
@@ -216,7 +235,9 @@ def build_report(data_yesterday, data_day_before, data_last_week, date_str):
     rev_change_lw = calc_change(y["total_revenue"], lw["total_revenue"])
 
     lines = []
-    lines.append(f"💰 *전체 매출: {y['total_revenue']:,.0f}원* ({y['total_quantity']}개)")
+    lines.append(f"💰 *순매출: {y['total_revenue']:,.0f}원* ({y['total_quantity']}개)")
+    if y["total_canceled"] > 0 or y["total_refunded"] > 0:
+        lines.append(f"   ↳ 취소: {y['total_canceled']:,.0f}원 / 환불: {y['total_refunded']:,.0f}원 차감 반영")
     lines.append(f"📈 전일 대비: 매출 {rev_change_db} / 수량 {qty_change_db}")
     lines.append(f"📊 전주 동요일 대비: 매출 {rev_change_lw}")
     lines.append("")
