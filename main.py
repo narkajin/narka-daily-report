@@ -140,7 +140,7 @@ def aggregate(orders):
     total_quantity = 0
     total_canceled = 0
     total_refunded = 0
-    total_coupon = 0
+    total_payment = 0  # 결제합계
 
     for order in orders:
         # 취소 주문 완전 제외
@@ -150,17 +150,17 @@ def aggregate(orders):
             continue
 
         amt = order.get("actual_order_amount", {})
+        # 결제합계 (이미 할인/쿠폰 차감된 금액)
         order_payment = float(amt.get("payment_amount", 0) or 0)
+        # 환불금액
         refund_amount = float(amt.get("refund_amount", 0) or 0)
-        coupon_discount = float(amt.get("coupon_discount_price", 0) or 0)
 
+        total_payment += order_payment
         if refund_amount > 0:
             total_refunded += refund_amount
-        if coupon_discount > 0:
-            total_coupon += coupon_discount
 
-        # 순매출 = 결제금액 - 환불 - 쿠폰할인
-        order_net = order_payment - refund_amount - coupon_discount
+        # 순매출 = 결제금액 - 환불 (카페24 대시보드 기준)
+        order_net = order_payment - refund_amount
         net_revenue += order_net
 
         if order_net <= 0:
@@ -183,7 +183,6 @@ def aggregate(orders):
             option = item.get("option_value", "")
             qty = int(item.get("quantity", 0))
 
-            # 주문 순매출을 아이템 정가 비율로 배분
             if total_item_price > 0 and order_net > 0:
                 ratio = item_prices[idx] / total_item_price
                 price = order_net * ratio
@@ -211,7 +210,7 @@ def aggregate(orders):
         "total_quantity": total_quantity,
         "total_canceled": total_canceled,
         "total_refunded": total_refunded,
-        "total_coupon": total_coupon
+        "total_payment": total_payment
     }
 
 # ==============================
@@ -238,15 +237,7 @@ def build_report(data_yesterday, data_day_before, data_last_week, date_str):
 
     lines = []
     lines.append(f"💰 *순매출: {y['total_revenue']:,.0f}원* ({y['total_quantity']}개)")
-    deductions = []
-    if y["total_canceled"] > 0:
-        deductions.append(f"취소 {y['total_canceled']:,.0f}원")
-    if y["total_refunded"] > 0:
-        deductions.append(f"환불 {y['total_refunded']:,.0f}원")
-    if y["total_coupon"] > 0:
-        deductions.append(f"쿠폰 {y['total_coupon']:,.0f}원")
-    if deductions:
-        lines.append(f"   ↳ {' / '.join(deductions)} 차감 반영")
+    lines.append(f"   ↳ 결제 {y['total_payment']:,.0f}원 - 환불 {y['total_refunded']:,.0f}원")
     lines.append(f"📈 전일 대비: 매출 {rev_change_db} / 수량 {qty_change_db}")
     lines.append(f"📊 전주 동요일 대비: 매출 {rev_change_lw}")
     lines.append("")
