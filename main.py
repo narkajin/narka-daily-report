@@ -136,34 +136,41 @@ def aggregate(orders):
     product_sales = defaultdict(lambda: {"quantity": 0, "revenue": 0})
     option_sales = defaultdict(lambda: {"quantity": 0, "revenue": 0})
     line_sales = defaultdict(lambda: {"quantity": 0, "revenue": 0})
-    net_revenue = 0
     total_quantity = 0
-    total_canceled = 0
-    total_refunded = 0
-    total_payment = 0  # 결제합계
+    
+    # 카페24 대시보드 결제합계 공식 (100% 일치)
+    # = initial_order_amount.payment_amount + naver_point + points_spent + credits_spent
+    gross_payment = 0
+    
+    # 당일 취소 금액 (같은 공식으로 취소 주문 합산)
+    cancel_payment = 0
+    cancel_count = 0
 
     for order in orders:
-        # 취소 주문 완전 제외
-        if order.get("canceled") == "T":
-            cancel_amt = float(order.get("actual_order_amount", {}).get("payment_amount", 0) or 0)
-            total_canceled += cancel_amt
+        init = order.get("initial_order_amount", {})
+        order_settle = (
+            float(init.get("payment_amount", 0) or 0)
+            + float(order.get("naver_point", 0) or 0)
+            + float(init.get("points_spent_amount", 0) or 0)
+            + float(init.get("credits_spent_amount", 0) or 0)
+        )
+
+        # 취소 주문 분리
+        has_cancel = order.get("canceled") == "T"
+        if not has_cancel:
+            for item in order.get("items", []):
+                if item.get("order_status", "").startswith("C"):
+                    has_cancel = True
+                    break
+
+        gross_payment += order_settle
+
+        if has_cancel:
+            cancel_payment += order_settle
+            cancel_count += 1
             continue
 
-        amt = order.get("actual_order_amount", {})
-        # 결제합계 (이미 할인/쿠폰 차감된 금액)
-        order_payment = float(amt.get("payment_amount", 0) or 0)
-        # 환불금액
-        refund_amount = float(amt.get("refund_amount", 0) or 0)
-
-        total_payment += order_payment
-        if refund_amount > 0:
-            total_refunded += refund_amount
-
-        # 순매출 = 결제금액 - 환불 (카페24 대시보드 기준)
-        order_net = order_payment - refund_amount
-        net_revenue += order_net
-
-        if order_net <= 0:
+        if order_settle <= 0:
             continue
 
         items = order.get("items", [])
@@ -183,9 +190,9 @@ def aggregate(orders):
             option = item.get("option_value", "")
             qty = int(item.get("quantity", 0))
 
-            if total_item_price > 0 and order_net > 0:
+            if total_item_price > 0 and order_settle > 0:
                 ratio = item_prices[idx] / total_item_price
-                price = order_net * ratio
+                price = order_settle * ratio
             else:
                 price = item_prices[idx]
 
@@ -206,11 +213,11 @@ def aggregate(orders):
         "products": sort_by_rev(product_sales),
         "options": sort_by_rev(option_sales),
         "lines": sort_by_rev(line_sales),
-        "total_revenue": net_revenue,
+        "total_revenue": gross_payment - cancel_payment,
         "total_quantity": total_quantity,
-        "total_canceled": total_canceled,
-        "total_refunded": total_refunded,
-        "total_payment": total_payment
+        "gross_payment": gross_payment,
+        "cancel_payment": cancel_payment,
+        "cancel_count": cancel_count
     }
 
 # ==============================
@@ -236,8 +243,10 @@ def build_report(data_yesterday, data_day_before, data_last_week, date_str):
     rev_change_lw = calc_change(y["total_revenue"], lw["total_revenue"])
 
     lines = []
-    lines.append(f"💰 *순매출: {y['total_revenue']:,.0f}원* ({y['total_quantity']}개)")
-    lines.append(f"   ↳ 결제 {y['total_payment']:,.0f}원 - 환불 {y['total_refunded']:,.0f}원")
+    lines.append(f"💰 *결제합계: {y['gross_payment']:,.0f}원* ({y['total_quantity']}개)")
+    if y["cancel_payment"] > 0:
+        lines.append(f"   ↳ 당일취소: -{y['cancel_payment']:,.0f}원 ({y['cancel_count']}건)")
+        lines.append(f"   ↳ *순결제: {y['total_revenue']:,.0f}원*")
     lines.append(f"📈 전일 대비: 매출 {rev_change_db} / 수량 {qty_change_db}")
     lines.append(f"📊 전주 동요일 대비: 매출 {rev_change_lw}")
     lines.append("")
