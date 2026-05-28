@@ -289,7 +289,7 @@ def generate_ai_insight(report_text, date_str):
 - 이모지 활용, 한국어, 간결한 실무 톤
 """
     headers = {"x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"}
-    body = {"model": "claude-sonnet-4-20250514", "max_tokens": 500, "messages": [{"role": "user", "content": prompt}]}
+    body = {"model": "claude-sonnet-4-6-20250217", "max_tokens": 500, "messages": [{"role": "user", "content": prompt}]}
     resp = requests.post("https://api.anthropic.com/v1/messages", headers=headers, json=body)
     result = resp.json()
     print(f"🤖 Claude API: {resp.status_code}")
