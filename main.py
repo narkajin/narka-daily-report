@@ -289,7 +289,7 @@ def generate_ai_insight(report_text, date_str):
 - 이모지 활용, 한국어, 간결한 실무 톤
 """
     headers = {"x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"}
-    body = {"model": "claude-sonnet-4-6-20250217", "max_tokens": 500, "messages": [{"role": "user", "content": prompt}]}
+    body = {"model": "claude-sonnet-4-20250514", "max_tokens": 500, "messages": [{"role": "user", "content": prompt}]}
     resp = requests.post("https://api.anthropic.com/v1/messages", headers=headers, json=body)
     result = resp.json()
     print(f"🤖 Claude API: {resp.status_code}")
@@ -323,6 +323,32 @@ def send_to_all(message):
             send_slack_dm(uid.strip(), message)
 
 # ==============================
+# 중복 발송 방지
+# ==============================
+def already_sent_today(date_str):
+    """슬랙 DM 히스토리에서 오늘 리포트가 이미 전송됐는지 확인"""
+    headers = {"Authorization": f"Bearer {SLACK_BOT_TOKEN}", "Content-Type": "application/json"}
+    first_user = SLACK_USER_IDS[0].strip() if SLACK_USER_IDS else ""
+    if not first_user:
+        return False
+    dm = requests.post("https://slack.com/api/conversations.open", headers=headers, json={"users": first_user})
+    dm_data = dm.json()
+    if not dm_data.get("ok"):
+        return False
+    ch = dm_data["channel"]["id"]
+    # 최근 5개 메시지 확인
+    hist = requests.get(f"https://slack.com/api/conversations.history?channel={ch}&limit=5", headers=headers)
+    hist_data = hist.json()
+    if not hist_data.get("ok"):
+        return False
+    search_key = f"일일 리포트 | {date_str}"
+    for msg in hist_data.get("messages", []):
+        if search_key in msg.get("text", ""):
+            print(f"⚠️ {date_str} 리포트 이미 발송됨 — 스킵")
+            return True
+    return False
+
+# ==============================
 # 메인
 # ==============================
 def main():
@@ -330,6 +356,10 @@ def main():
     token = refresh_access_token()
 
     orders_y, orders_db, orders_lw, date_str = get_orders(token)
+
+    # 중복 발송 방지 체크
+    if already_sent_today(date_str):
+        return
 
     if not orders_y:
         send_to_all(f"⚠️ *Narka 일일 리포트 | {date_str}*\n\n어제 카페24 주문 데이터가 없습니다.")
