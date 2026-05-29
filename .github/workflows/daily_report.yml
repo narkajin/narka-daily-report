@@ -3,7 +3,7 @@ name: Narka Daily Cafe24 Report
 on:
   schedule:
     - cron: '30 22 * * *'
-  workflow_dispatch:
+    - cron: '0 1 * * *'  workflow_dispatch:
 
 jobs:
   daily-report:
