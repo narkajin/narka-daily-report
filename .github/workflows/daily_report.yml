@@ -1,9 +1,6 @@
 name: Narka Daily Cafe24 Report
 
 on:
-  schedule:
-    - cron: '0 23 * * *'
-    - cron: '0 2 * * *'
   workflow_dispatch:
 
 jobs:
