@@ -101,7 +101,7 @@ def get_orders_for_date(token, date_str):
     return all_orders
 
 def get_orders(token):
-    now = datetime.now()
+    now = datetime.utcnow() + timedelta(hours=9)  # KST 고정
     yesterday = (now - timedelta(days=1)).strftime("%Y-%m-%d")
     day_before = (now - timedelta(days=2)).strftime("%Y-%m-%d")
     same_day_last_week = (now - timedelta(days=8)).strftime("%Y-%m-%d")
